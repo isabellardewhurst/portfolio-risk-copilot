@@ -3,12 +3,176 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.express as px
+from datetime import datetime, timedelta
+
 
 st.set_page_config(
     page_title="AI Portfolio Risk Copilot",
     page_icon="📊",
     layout="wide"
 )
+
+
+# -----------------------------
+# Helper functions
+# -----------------------------
+
+def clean_ticker(ticker):
+    """
+    Cleans ticker text from the CSV.
+    Example: ' aapl ' becomes 'AAPL'
+    """
+    return str(ticker).upper().strip()
+
+
+def get_prices_from_yfinance_bulk(tickers):
+    """
+    First attempt: download all tickers together using yfinance.
+    """
+    raw_data = yf.download(
+        tickers=tickers,
+        period="1y",
+        interval="1d",
+        auto_adjust=True,
+        progress=False,
+        threads=False
+    )
+
+    if raw_data.empty:
+        return pd.DataFrame()
+
+    if "Close" not in raw_data.columns:
+        return pd.DataFrame()
+
+    price_data = raw_data["Close"]
+
+    if isinstance(price_data, pd.Series):
+        price_data = price_data.to_frame(name=tickers[0])
+
+    price_data.columns = [str(col).upper().strip() for col in price_data.columns]
+
+    return price_data
+
+
+def get_prices_from_yfinance_individual(tickers):
+    """
+    Second attempt: download each ticker individually using yfinance.
+    Sometimes individual downloads work even when bulk download fails.
+    """
+    all_prices = {}
+
+    for ticker in tickers:
+        try:
+            data = yf.download(
+                tickers=ticker,
+                period="1y",
+                interval="1d",
+                auto_adjust=True,
+                progress=False,
+                threads=False
+            )
+
+            if data.empty:
+                continue
+
+            if "Close" not in data.columns:
+                continue
+
+            all_prices[ticker] = data["Close"]
+
+        except Exception:
+            continue
+
+    if not all_prices:
+        return pd.DataFrame()
+
+    price_data = pd.DataFrame(all_prices)
+    price_data.columns = [str(col).upper().strip() for col in price_data.columns]
+
+    return price_data
+
+
+def get_prices_from_stooq(tickers):
+    """
+    Third attempt: backup source using Stooq's public CSV download.
+
+    This version is mainly for US-listed tickers.
+    Example:
+    AAPL becomes aapl.us
+    MSFT becomes msft.us
+    """
+    all_prices = {}
+
+    end_date = datetime.today()
+    start_date = end_date - timedelta(days=365)
+
+    d1 = start_date.strftime("%Y%m%d")
+    d2 = end_date.strftime("%Y%m%d")
+
+    for ticker in tickers:
+        try:
+            stooq_symbol = ticker.lower() + ".us"
+
+            url = (
+                "https://stooq.com/q/d/l/"
+                f"?s={stooq_symbol}&d1={d1}&d2={d2}&i=d"
+            )
+
+            data = pd.read_csv(url)
+
+            if data.empty:
+                continue
+
+            if "Close" not in data.columns:
+                continue
+
+            data["Date"] = pd.to_datetime(data["Date"])
+            data = data.set_index("Date")
+
+            all_prices[ticker] = data["Close"]
+
+        except Exception:
+            continue
+
+    if not all_prices:
+        return pd.DataFrame()
+
+    price_data = pd.DataFrame(all_prices)
+    price_data.columns = [str(col).upper().strip() for col in price_data.columns]
+
+    return price_data
+
+
+def get_market_prices(tickers):
+    """
+    Main market data function.
+
+    It tries:
+    1. yfinance bulk
+    2. yfinance individual
+    3. Stooq backup
+    """
+    price_data = get_prices_from_yfinance_bulk(tickers)
+
+    if not price_data.empty:
+        return price_data, "yfinance bulk download"
+
+    price_data = get_prices_from_yfinance_individual(tickers)
+
+    if not price_data.empty:
+        return price_data, "yfinance individual download"
+
+    price_data = get_prices_from_stooq(tickers)
+
+    if not price_data.empty:
+        return price_data, "Stooq backup download"
+
+    return pd.DataFrame(), "No market data source available"
+
+
+# -----------------------------
+# App title and intro
+# -----------------------------
 
 st.title("📊 AI Portfolio Risk Copilot")
 
@@ -17,14 +181,20 @@ st.write(
 )
 
 st.caption(
-    "Market data is retrieved using yfinance for educational/demo purposes. "
-    "If live market data is temporarily unavailable, please try again later."
+    "Market data is retrieved using yfinance first, with a Stooq backup for US-listed tickers. "
+    "This app is for educational/demo purposes only and is not financial advice."
 )
+
+
+# -----------------------------
+# File upload
+# -----------------------------
 
 uploaded_file = st.file_uploader(
     "Upload your portfolio CSV",
     type=["csv"]
 )
+
 
 if uploaded_file is not None:
     portfolio = pd.read_csv(uploaded_file)
@@ -38,7 +208,9 @@ if uploaded_file is not None:
         st.error("Your CSV must contain two columns: ticker and position_value")
         st.stop()
 
-    portfolio["ticker"] = portfolio["ticker"].astype(str).str.upper().str.strip()
+    # Clean uploaded data
+    portfolio["ticker"] = portfolio["ticker"].apply(clean_ticker)
+
     portfolio["position_value"] = pd.to_numeric(
         portfolio["position_value"],
         errors="coerce"
@@ -50,6 +222,13 @@ if uploaded_file is not None:
     if portfolio.empty:
         st.error("Your CSV does not contain any valid holdings.")
         st.stop()
+
+    # Combine duplicate tickers
+    portfolio = (
+        portfolio
+        .groupby("ticker", as_index=False)["position_value"]
+        .sum()
+    )
 
     total_value = portfolio["position_value"].sum()
     portfolio["weight"] = portfolio["position_value"] / total_value
@@ -70,82 +249,77 @@ if uploaded_file is not None:
 
     tickers = portfolio["ticker"].tolist()
 
+    # -----------------------------
+    # Market data download
+    # -----------------------------
+
     st.subheader("Downloading Market Data")
 
-    try:
-        raw_data = yf.download(
-            tickers=tickers,
-            period="1y",
-            interval="1d",
-            auto_adjust=True,
-            progress=False,
-            threads=False
+    with st.spinner("Trying to download market data..."):
+        price_data, data_source = get_market_prices(tickers)
+
+    if price_data.empty:
+        st.error(
+            "Market data could not be downloaded from yfinance or the backup source. "
+            "Please check that your tickers are valid US-listed tickers, for example AAPL, MSFT, NVDA, JPM."
         )
 
-        if raw_data.empty:
-            st.error(
-                "Market data could not be downloaded. This may be a temporary data provider issue, "
-                "or one of the tickers may be invalid."
-            )
-            st.stop()
+        st.write("Try this sample CSV:")
 
-        if "Close" not in raw_data.columns:
-            st.error(
-                "The downloaded data did not contain closing prices. "
-                "Please try again later or check the tickers."
-            )
-            st.stop()
+        st.code(
+            """ticker,position_value
+AAPL,100000
+MSFT,80000
+NVDA,60000
+JPM,40000""",
+            language="csv"
+        )
 
-        price_data = raw_data["Close"]
-
-        if isinstance(price_data, pd.Series):
-            price_data = price_data.to_frame(name=tickers[0])
-
-        price_data.columns = [str(col).upper().strip() for col in price_data.columns]
-
-        missing_tickers = [
-            ticker for ticker in tickers
-            if ticker not in price_data.columns
-        ]
-
-        if missing_tickers:
-            st.warning(
-                "No price data was found for these tickers: "
-                + ", ".join(missing_tickers)
-            )
-
-        available_tickers = [
-            ticker for ticker in tickers
-            if ticker in price_data.columns
-        ]
-
-        if len(available_tickers) == 0:
-            st.error("No valid ticker data was available. Please check your CSV.")
-            st.stop()
-
-        price_data = price_data[available_tickers].dropna()
-
-        if price_data.empty:
-            st.error(
-                "Price data was downloaded, but after cleaning there was no usable data left."
-            )
-            st.stop()
-
-        portfolio = portfolio[portfolio["ticker"].isin(available_tickers)]
-
-        total_value = portfolio["position_value"].sum()
-        portfolio["weight"] = portfolio["position_value"] / total_value
-
-        st.success("Market data downloaded successfully.")
-
-        st.write("Latest price data:")
-        st.dataframe(price_data.tail())
-
-    except Exception as e:
-        st.error("Something went wrong while downloading market data.")
-        st.write("Error details:")
-        st.code(str(e))
         st.stop()
+
+    price_data = price_data.dropna(how="all")
+
+    available_tickers = [
+        ticker for ticker in tickers
+        if ticker in price_data.columns
+    ]
+
+    missing_tickers = [
+        ticker for ticker in tickers
+        if ticker not in price_data.columns
+    ]
+
+    if missing_tickers:
+        st.warning(
+            "No usable price data was found for these tickers: "
+            + ", ".join(missing_tickers)
+        )
+
+    if len(available_tickers) == 0:
+        st.error("No valid ticker data was available. Please check your CSV.")
+        st.stop()
+
+    price_data = price_data[available_tickers].dropna()
+
+    if price_data.empty:
+        st.error(
+            "Price data was downloaded, but after cleaning there was no usable data left."
+        )
+        st.stop()
+
+    portfolio = portfolio[portfolio["ticker"].isin(available_tickers)]
+
+    total_value = portfolio["position_value"].sum()
+    portfolio["weight"] = portfolio["position_value"] / total_value
+
+    st.success(f"Market data downloaded successfully using: {data_source}")
+
+    st.write("Latest price data:")
+    st.dataframe(price_data.tail())
+
+    # -----------------------------
+    # Returns and portfolio growth
+    # -----------------------------
 
     returns = price_data.pct_change().dropna()
 
@@ -170,6 +344,10 @@ if uploaded_file is not None:
     )
 
     st.plotly_chart(fig_growth, use_container_width=True)
+
+    # -----------------------------
+    # Risk metrics
+    # -----------------------------
 
     daily_volatility = portfolio_returns.std()
     annual_volatility = daily_volatility * np.sqrt(252)
@@ -197,6 +375,10 @@ if uploaded_file is not None:
         f"{var_95:.2%}"
     )
 
+    # -----------------------------
+    # Drawdown chart
+    # -----------------------------
+
     st.subheader("Drawdown Over Time")
 
     fig_drawdown = px.line(
@@ -205,6 +387,10 @@ if uploaded_file is not None:
     )
 
     st.plotly_chart(fig_drawdown, use_container_width=True)
+
+    # -----------------------------
+    # Correlation matrix
+    # -----------------------------
 
     st.subheader("Correlation Matrix")
 
@@ -218,9 +404,14 @@ if uploaded_file is not None:
         )
 
         st.plotly_chart(fig_corr, use_container_width=True)
+
     else:
         correlation_matrix = None
         st.info("Correlation requires at least two valid holdings.")
+
+    # -----------------------------
+    # AI-style risk summary
+    # -----------------------------
 
     st.subheader("AI-Style Risk Summary")
 
@@ -301,3 +492,14 @@ if uploaded_file is not None:
 
 else:
     st.info("Upload a CSV file with columns: ticker, position_value")
+
+    st.write("Example:")
+
+    st.code(
+        """ticker,position_value
+AAPL,100000
+MSFT,80000
+NVDA,60000
+JPM,40000""",
+        language="csv"
+    )
