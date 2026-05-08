@@ -34,4 +34,7 @@ MSFT,80000
 NVDA,60000
 JPM,40000
 
-Disclaimer: This app is for educational and portfolio demonstration purposes only. It is not financial advice.
+
+## Disclaimer
+
+This app is for educational and portfolio demonstration purposes only. It is not financial advice.
