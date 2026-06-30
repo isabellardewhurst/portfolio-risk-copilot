@@ -60,7 +60,7 @@ def get_prices_from_yfinance_bulk(tickers):
         return price_data
 
     except Exception as e:
-        print("Bulk download error:", e)
+        st.error(f"Bulk yfinance error: {str(e)}")
         return pd.DataFrame()
 
 
@@ -100,7 +100,7 @@ def get_prices_from_yfinance_individual(tickers):
                 all_prices[ticker] = data["Close"]
 
         except Exception as e:
-            print(f"Error downloading {ticker}: {e}")
+            st.error(f"Ticker {ticker} error: {str(e)}")
             continue
 
     if not all_prices:
@@ -151,7 +151,7 @@ def get_prices_from_stooq(tickers):
             all_prices[ticker] = data["Close"]
 
         except Exception as e:
-            print(f"Stooq error {ticker}: {e}")
+            st.error(f"Stooq {ticker} error: {str(e)}")
             continue
 
     if not all_prices:
@@ -192,6 +192,23 @@ def get_market_prices(tickers):
 # ---------------------------------
 
 st.title("📊 AI Portfolio Risk Copilot")
+
+st.subheader("Connection Test")
+
+try:
+    test = yf.download(
+        "AAPL",
+        period="5d",
+        progress=False
+    )
+
+    st.write("Yahoo test result:")
+
+    st.dataframe(test)
+
+except Exception as e:
+
+    st.error(f"Yahoo direct test failed: {str(e)}")
 
 st.write(
     "Upload a portfolio CSV and instantly see concentration, volatility, drawdown, and correlation risks."
