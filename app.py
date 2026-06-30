@@ -94,8 +94,8 @@ def get_prices_from_yfinance_bulk(tickers):
 def get_prices_from_yfinance_individual(tickers):
     """
     Second attempt: download each ticker individually using yfinance.
-    Sometimes individual downloads work even when bulk download fails.
     """
+
     all_prices = {}
 
     for ticker in tickers:
@@ -106,35 +106,40 @@ def get_prices_from_yfinance_individual(tickers):
                 interval="1d",
                 auto_adjust=True,
                 progress=False,
-                threads=False
+                threads=False,
+                timeout=20
             )
-
             if data.empty:
                 continue
 
-if isinstance(data.columns, pd.MultiIndex):
+            # Handle MultiIndex columns
+            if isinstance(data.columns, pd.MultiIndex):
 
-    if "Close" not in data.columns.get_level_values(0):
-        continue
+                if "Close" not in data.columns.get_level_values(0):
+                    continue
 
-    all_prices[ticker] = data["Close"].squeeze()
+                all_prices[ticker] = data["Close"].squeeze()
 
-else:
+            else:
 
-    if "Close" not in data.columns:
-        continue
+                if "Close" not in data.columns:
+                    continue
 
-    all_prices[ticker] = data["Close"]
+                all_prices[ticker] = data["Close"]
 
-except Exception as e:
-    print(f"Error downloading {ticker}: {e}")
-    continue
+        except Exception as e:
+            print(f"Error downloading {ticker}: {e}")
+            continue
 
     if not all_prices:
         return pd.DataFrame()
 
     price_data = pd.DataFrame(all_prices)
-    price_data.columns = [str(col).upper().strip() for col in price_data.columns]
+
+    price_data.columns = [
+        str(col).upper().strip()
+        for col in price_data.columns
+    ]
 
     return price_data
 
