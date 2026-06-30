@@ -41,10 +41,47 @@ def get_prices_from_yfinance_bulk(tickers):
     if raw_data.empty:
         return pd.DataFrame()
 
-    if "Close" not in raw_data.columns:
-        return pd.DataFrame()
+def get_prices_from_yfinance_bulk(tickers):
 
-    price_data = raw_data["Close"]
+    try:
+        raw_data = yf.download(
+            tickers=tickers,
+            period="1y",
+            interval="1d",
+            auto_adjust=True,
+            progress=False,
+            threads=False,
+            group_by="column"
+        )
+
+        if raw_data.empty:
+            return pd.DataFrame()
+
+        # handle MultiIndex columns
+        if isinstance(raw_data.columns, pd.MultiIndex):
+
+            if "Close" not in raw_data.columns.get_level_values(0):
+                return pd.DataFrame()
+
+            price_data = raw_data["Close"]
+
+        else:
+
+            if "Close" not in raw_data.columns:
+                return pd.DataFrame()
+
+            price_data = raw_data[["Close"]]
+
+        price_data.columns = [
+            str(col).upper().strip()
+            for col in price_data.columns
+        ]
+
+        return price_data
+
+    except Exception as e:
+        print("Bulk download error:", e)
+        return pd.DataFrame()
 
     if isinstance(price_data, pd.Series):
         price_data = price_data.to_frame(name=tickers[0])
@@ -75,13 +112,23 @@ def get_prices_from_yfinance_individual(tickers):
             if data.empty:
                 continue
 
-            if "Close" not in data.columns:
-                continue
+if isinstance(data.columns, pd.MultiIndex):
 
-            all_prices[ticker] = data["Close"]
+    if "Close" not in data.columns.get_level_values(0):
+        continue
 
-        except Exception:
-            continue
+    all_prices[ticker] = data["Close"].squeeze()
+
+else:
+
+    if "Close" not in data.columns:
+        continue
+
+    all_prices[ticker] = data["Close"]
+
+except Exception as e:
+    print(f"Error downloading {ticker}: {e}")
+    continue
 
     if not all_prices:
         return pd.DataFrame()
@@ -131,8 +178,9 @@ def get_prices_from_stooq(tickers):
 
             all_prices[ticker] = data["Close"]
 
-        except Exception:
-            continue
+except Exception as e:
+    print(f"Error downloading {ticker}: {e}")
+    continue
 
     if not all_prices:
         return pd.DataFrame()
