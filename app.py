@@ -23,149 +23,104 @@ def clean_ticker(ticker):
 def get_prices_from_yfinance_bulk(tickers):
 
     try:
+
+        st.write("Testing yfinance bulk request...")
+
         raw_data = yf.download(
             tickers=tickers,
             period="1y",
             interval="1d",
             auto_adjust=True,
             progress=False,
-            threads=False,
-            group_by="column",
-            timeout=20
+            threads=False
         )
 
+        st.write("Raw yfinance response:")
+        st.write(raw_data)
+
+        st.write("Columns:")
+        st.write(raw_data.columns)
+
         if raw_data.empty:
+            st.error("Yahoo returned EMPTY dataframe")
             return pd.DataFrame()
 
-        # Newer yfinance versions sometimes return MultiIndex columns
         if isinstance(raw_data.columns, pd.MultiIndex):
 
+            st.write("Detected MultiIndex")
+
             if "Close" not in raw_data.columns.get_level_values(0):
+                st.error("No Close column in MultiIndex")
                 return pd.DataFrame()
 
-            price_data = raw_data["Close"]
+            return raw_data["Close"]
 
         else:
 
+            st.write("Detected normal columns")
+
             if "Close" not in raw_data.columns:
+                st.error("No Close column found")
                 return pd.DataFrame()
 
-            price_data = raw_data[["Close"]]
-
-        price_data.columns = [
-            str(col).upper().strip()
-            for col in price_data.columns
-        ]
-
-        return price_data
+            return raw_data[["Close"]]
 
     except Exception as e:
-        st.error(f"Bulk yfinance error: {str(e)}")
+
+        st.error(f"Yahoo bulk exception: {str(e)}")
+
         return pd.DataFrame()
 
+def get_prices_from_yfinance_bulk(tickers):
 
-def get_prices_from_yfinance_individual(tickers):
+    try:
 
-    all_prices = {}
+        st.write("Testing yfinance bulk request...")
 
-    for ticker in tickers:
+        raw_data = yf.download(
+            tickers=tickers,
+            period="1y",
+            interval="1d",
+            auto_adjust=True,
+            progress=False,
+            threads=False
+        )
 
-        try:
+        st.write("Raw yfinance response:")
+        st.write(raw_data)
 
-            data = yf.download(
-                tickers=ticker,
-                period="1y",
-                interval="1d",
-                auto_adjust=True,
-                progress=False,
-                threads=False,
-                timeout=20
-            )
+        st.write("Columns:")
+        st.write(raw_data.columns)
 
-            if data.empty:
-                continue
+        if raw_data.empty:
+            st.error("Yahoo returned EMPTY dataframe")
+            return pd.DataFrame()
 
-            if isinstance(data.columns, pd.MultiIndex):
+        if isinstance(raw_data.columns, pd.MultiIndex):
 
-                if "Close" not in data.columns.get_level_values(0):
-                    continue
+            st.write("Detected MultiIndex")
 
-                all_prices[ticker] = data["Close"].squeeze()
+            if "Close" not in raw_data.columns.get_level_values(0):
+                st.error("No Close column in MultiIndex")
+                return pd.DataFrame()
 
-            else:
+            return raw_data["Close"]
 
-                if "Close" not in data.columns:
-                    continue
+        else:
 
-                all_prices[ticker] = data["Close"]
+            st.write("Detected normal columns")
 
-        except Exception as e:
-            st.error(f"Ticker {ticker} error: {str(e)}")
-            continue
+            if "Close" not in raw_data.columns:
+                st.error("No Close column found")
+                return pd.DataFrame()
 
-    if not all_prices:
+            return raw_data[["Close"]]
+
+    except Exception as e:
+
+        st.error(f"Yahoo bulk exception: {str(e)}")
+
         return pd.DataFrame()
-
-    price_data = pd.DataFrame(all_prices)
-
-    price_data.columns = [
-        str(col).upper().strip()
-        for col in price_data.columns
-    ]
-
-    return price_data
-
-
-def get_prices_from_stooq(tickers):
-
-    all_prices = {}
-
-    end_date = datetime.today()
-    start_date = end_date - timedelta(days=365)
-
-    d1 = start_date.strftime("%Y%m%d")
-    d2 = end_date.strftime("%Y%m%d")
-
-    for ticker in tickers:
-
-        try:
-
-            stooq_symbol = ticker.lower() + ".us"
-
-            url = (
-                "https://stooq.com/q/d/l/"
-                f"?s={stooq_symbol}&d1={d1}&d2={d2}&i=d"
-            )
-
-            data = pd.read_csv(url)
-
-            if data.empty:
-                continue
-
-            if "Close" not in data.columns:
-                continue
-
-            data["Date"] = pd.to_datetime(data["Date"])
-            data = data.set_index("Date")
-
-            all_prices[ticker] = data["Close"]
-
-        except Exception as e:
-            st.error(f"Stooq {ticker} error: {str(e)}")
-            continue
-
-    if not all_prices:
-        return pd.DataFrame()
-
-    price_data = pd.DataFrame(all_prices)
-
-    price_data.columns = [
-        str(col).upper().strip()
-        for col in price_data.columns
-    ]
-
-    return price_data
-
 
 def get_market_prices(tickers):
 
@@ -179,10 +134,7 @@ def get_market_prices(tickers):
     if not price_data.empty:
         return price_data, "Yahoo Finance individual"
 
-    price_data = get_prices_from_stooq(tickers)
-
-    if not price_data.empty:
-        return price_data, "Stooq backup"
+    return pd.DataFrame(), "No market data source available"
 
     return pd.DataFrame(), "No market data source available"
 
