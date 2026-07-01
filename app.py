@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.express as px
-from datetime import datetime, timedelta
 
 st.set_page_config(
     page_title="AI Portfolio Risk Copilot",
@@ -11,160 +10,93 @@ st.set_page_config(
     layout="wide"
 )
 
-
-# ---------------------------------
+# -----------------------------
 # Helper functions
-# ---------------------------------
+# -----------------------------
 
 def clean_ticker(ticker):
     return str(ticker).upper().strip()
 
 
-def get_prices_from_yfinance_bulk(tickers):
+def get_prices(tickers):
+    """
+    Download price history from Yahoo Finance.
+    Handles new yfinance MultiIndex format.
+    """
 
     try:
-
-        st.write("Testing yfinance bulk request...")
 
         raw_data = yf.download(
             tickers=tickers,
             period="1y",
             interval="1d",
-            auto_adjust=True,
+            auto_adjust=False,
             progress=False,
-            threads=False
+            threads=False,
+            group_by="column"
         )
 
-        st.write("Raw yfinance response:")
-        st.write(raw_data)
-
-        st.write("Columns:")
-        st.write(raw_data.columns)
-
         if raw_data.empty:
-            st.error("Yahoo returned EMPTY dataframe")
             return pd.DataFrame()
 
+        # Newer yfinance often returns MultiIndex columns
         if isinstance(raw_data.columns, pd.MultiIndex):
 
-            st.write("Detected MultiIndex")
+            # level 0 = price type (Open, Close...)
+            if "Close" in raw_data.columns.get_level_values(0):
+                price_data = raw_data["Close"]
 
-            if "Close" not in raw_data.columns.get_level_values(0):
-                st.error("No Close column in MultiIndex")
+            elif "Adj Close" in raw_data.columns.get_level_values(0):
+                price_data = raw_data["Adj Close"]
+
+            else:
                 return pd.DataFrame()
-
-            return raw_data["Close"]
 
         else:
 
-            st.write("Detected normal columns")
+            # single ticker case
+            if "Close" in raw_data.columns:
+                price_data = raw_data[["Close"]]
+                price_data.columns = [tickers[0]]
 
-            if "Close" not in raw_data.columns:
-                st.error("No Close column found")
+            elif "Adj Close" in raw_data.columns:
+                price_data = raw_data[["Adj Close"]]
+                price_data.columns = [tickers[0]]
+
+            else:
                 return pd.DataFrame()
 
-            return raw_data[["Close"]]
+        # clean column names
+        price_data.columns = [
+            str(col).upper().strip()
+            for col in price_data.columns
+        ]
+
+        return price_data.dropna(how="all")
 
     except Exception as e:
 
-        st.error(f"Yahoo bulk exception: {str(e)}")
-
+        st.error(f"Yahoo Finance error: {str(e)}")
         return pd.DataFrame()
 
-def get_prices_from_yfinance_bulk(tickers):
 
-    try:
-
-        st.write("Testing yfinance bulk request...")
-
-        raw_data = yf.download(
-            tickers=tickers,
-            period="1y",
-            interval="1d",
-            auto_adjust=True,
-            progress=False,
-            threads=False
-        )
-
-        st.write("Raw yfinance response:")
-        st.write(raw_data)
-
-        st.write("Columns:")
-        st.write(raw_data.columns)
-
-        if raw_data.empty:
-            st.error("Yahoo returned EMPTY dataframe")
-            return pd.DataFrame()
-
-        if isinstance(raw_data.columns, pd.MultiIndex):
-
-            st.write("Detected MultiIndex")
-
-            if "Close" not in raw_data.columns.get_level_values(0):
-                st.error("No Close column in MultiIndex")
-                return pd.DataFrame()
-
-            return raw_data["Close"]
-
-        else:
-
-            st.write("Detected normal columns")
-
-            if "Close" not in raw_data.columns:
-                st.error("No Close column found")
-                return pd.DataFrame()
-
-            return raw_data[["Close"]]
-
-    except Exception as e:
-
-        st.error(f"Yahoo bulk exception: {str(e)}")
-
-        return pd.DataFrame()
-
-def get_market_prices(tickers):
-
-    price_data = get_prices_from_yfinance_bulk(tickers)
-
-    if not price_data.empty:
-        return price_data, "Yahoo Finance bulk"
-
-    price_data = get_prices_from_yfinance_individual(tickers)
-
-    if not price_data.empty:
-        return price_data, "Yahoo Finance individual"
-
-    return pd.DataFrame(), "No market data source available"
-
-    return pd.DataFrame(), "No market data source available"
-
-
-# ---------------------------------
-# UI
-# ---------------------------------
+# -----------------------------
+# App intro
+# -----------------------------
 
 st.title("📊 AI Portfolio Risk Copilot")
-
-st.subheader("Connection Test")
-
-try:
-    test = yf.download(
-        "AAPL",
-        period="5d",
-        progress=False
-    )
-
-    st.write("Yahoo test result:")
-
-    st.dataframe(test)
-
-except Exception as e:
-
-    st.error(f"Yahoo direct test failed: {str(e)}")
 
 st.write(
     "Upload a portfolio CSV and instantly see concentration, volatility, drawdown, and correlation risks."
 )
+
+st.caption(
+    "For educational/demo purposes only. Not financial advice."
+)
+
+# -----------------------------
+# Upload file
+# -----------------------------
 
 uploaded_file = st.file_uploader(
     "Upload portfolio CSV",
@@ -185,17 +117,21 @@ JPM,40000"""
 
     st.stop()
 
+# -----------------------------
+# Read portfolio
+# -----------------------------
 
 portfolio = pd.read_csv(uploaded_file)
 
 required_columns = {"ticker", "position_value"}
 
 if not required_columns.issubset(portfolio.columns):
-    st.error("CSV must contain ticker and position_value")
+
+    st.error("CSV must contain columns: ticker and position_value")
     st.stop()
 
-
 portfolio["ticker"] = portfolio["ticker"].apply(clean_ticker)
+
 portfolio["position_value"] = pd.to_numeric(
     portfolio["position_value"],
     errors="coerce"
@@ -204,6 +140,12 @@ portfolio["position_value"] = pd.to_numeric(
 portfolio = portfolio.dropna()
 portfolio = portfolio[portfolio["position_value"] > 0]
 
+if portfolio.empty:
+
+    st.error("No valid holdings found.")
+    st.stop()
+
+# combine duplicates
 portfolio = (
     portfolio
     .groupby("ticker", as_index=False)["position_value"]
@@ -216,65 +158,110 @@ portfolio["weight"] = (
     portfolio["position_value"] / total_value
 )
 
+# -----------------------------
+# Portfolio display
+# -----------------------------
+
 st.success("Portfolio uploaded successfully")
 
+st.subheader("Portfolio Holdings")
+
 st.dataframe(portfolio)
+
+fig_weights = px.pie(
+    portfolio,
+    names="ticker",
+    values="position_value",
+    title="Portfolio Allocation"
+)
+
+st.plotly_chart(
+    fig_weights,
+    use_container_width=True
+)
+
+# -----------------------------
+# Download market data
+# -----------------------------
 
 tickers = portfolio["ticker"].tolist()
 
 st.subheader("Downloading market data")
 
-with st.spinner("Downloading prices..."):
+with st.spinner("Downloading prices from Yahoo Finance..."):
 
-    price_data, data_source = get_market_prices(tickers)
+    price_data = get_prices(tickers)
 
 if price_data.empty:
 
-    st.error(
-        "Could not download market data."
-    )
-
+    st.error("Could not download market data from Yahoo Finance.")
     st.stop()
 
-
-st.success(f"Data source used: {data_source}")
+st.success("Market data downloaded successfully")
 
 st.dataframe(price_data.tail())
 
+# -----------------------------
+# Calculate returns
+# -----------------------------
 
 returns = price_data.pct_change().dropna()
 
-weights = portfolio.set_index("ticker")["weight"]
+if returns.empty:
+
+    st.error("Not enough price history.")
+    st.stop()
 
 available_tickers = [
-    t for t in tickers
-    if t in returns.columns
+    ticker for ticker in tickers
+    if ticker in returns.columns
 ]
 
 returns = returns[available_tickers]
 
+weights = portfolio.set_index("ticker")["weight"]
 weights = weights[available_tickers]
 
 portfolio_returns = returns.dot(weights)
 
 portfolio_growth = (1 + portfolio_returns).cumprod()
 
-fig = px.line(
+# -----------------------------
+# Growth chart
+# -----------------------------
+
+st.subheader("Portfolio Growth Over Time")
+
+fig_growth = px.line(
     portfolio_growth,
-    title="Portfolio Growth"
+    title="Growth of $1 Invested"
 )
 
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(
+    fig_growth,
+    use_container_width=True
+)
 
+# -----------------------------
+# Risk metrics
+# -----------------------------
 
 daily_volatility = portfolio_returns.std()
+
 annual_volatility = daily_volatility * np.sqrt(252)
 
 running_max = portfolio_growth.cummax()
-drawdown = (portfolio_growth - running_max) / running_max
+
+drawdown = (
+    portfolio_growth - running_max
+) / running_max
+
 max_drawdown = drawdown.min()
 
-var_95 = np.percentile(portfolio_returns, 5)
+var_95 = np.percentile(
+    portfolio_returns,
+    5
+)
 
 col1, col2, col3 = st.columns(3)
 
@@ -292,3 +279,154 @@ col3.metric(
     "95% Daily VaR",
     f"{var_95:.2%}"
 )
+
+# -----------------------------
+# Drawdown chart
+# -----------------------------
+
+st.subheader("Drawdown")
+
+fig_drawdown = px.line(
+    drawdown,
+    title="Portfolio Drawdown"
+)
+
+st.plotly_chart(
+    fig_drawdown,
+    use_container_width=True
+)
+
+# -----------------------------
+# Correlation matrix
+# -----------------------------
+
+st.subheader("Correlation Matrix")
+
+if len(available_tickers) > 1:
+
+    correlation_matrix = returns.corr()
+
+    fig_corr = px.imshow(
+        correlation_matrix,
+        text_auto=True,
+        title="Stock Correlation Heatmap"
+    )
+
+    st.plotly_chart(
+        fig_corr,
+        use_container_width=True
+    )
+
+else:
+
+    correlation_matrix = None
+
+    st.info(
+        "Need at least two holdings for correlation."
+    )
+
+# -----------------------------
+# AI risk summary
+# -----------------------------
+
+st.subheader("AI-Style Risk Summary")
+
+largest_position = portfolio.sort_values(
+    "weight",
+    ascending=False
+).iloc[0]
+
+risk_comments = []
+
+# concentration
+if largest_position["weight"] > 0.40:
+
+    risk_comments.append(
+        f"Portfolio concentration is high. "
+        f"{largest_position['ticker']} represents "
+        f"{largest_position['weight']:.1%}."
+    )
+
+elif largest_position["weight"] > 0.25:
+
+    risk_comments.append(
+        f"Portfolio has moderate concentration risk. "
+        f"Largest holding is {largest_position['ticker']} "
+        f"at {largest_position['weight']:.1%}."
+    )
+
+else:
+
+    risk_comments.append(
+        "Portfolio is reasonably diversified by position size."
+    )
+
+# volatility
+if annual_volatility > 0.30:
+
+    risk_comments.append(
+        "Historical volatility is high."
+    )
+
+elif annual_volatility > 0.18:
+
+    risk_comments.append(
+        "Historical volatility is moderate."
+    )
+
+else:
+
+    risk_comments.append(
+        "Historical volatility is relatively low."
+    )
+
+# drawdown
+if max_drawdown < -0.25:
+
+    risk_comments.append(
+        "Portfolio experienced severe drawdowns historically."
+    )
+
+elif max_drawdown < -0.15:
+
+    risk_comments.append(
+        "Portfolio experienced moderate historical drawdowns."
+    )
+
+else:
+
+    risk_comments.append(
+        "Historical drawdowns have been relatively contained."
+    )
+
+# correlation
+if correlation_matrix is not None:
+
+    avg_corr = correlation_matrix.values[
+        np.triu_indices_from(
+            correlation_matrix,
+            k=1
+        )
+    ].mean()
+
+    if avg_corr > 0.60:
+
+        risk_comments.append(
+            "Holdings are highly correlated. Diversification benefit is limited."
+        )
+
+    elif avg_corr > 0.30:
+
+        risk_comments.append(
+            "Holdings have moderate correlation."
+        )
+
+    else:
+
+        risk_comments.append(
+            "Holdings have relatively low correlation."
+        )
+
+for comment in risk_comments:
+
+    st.write("• " + comment)
